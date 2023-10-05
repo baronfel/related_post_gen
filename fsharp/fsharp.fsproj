@@ -2,7 +2,8 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net7.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- <PublishAOT>true</PublishAOT> -->
   </PropertyGroup>
 
   <ItemGroup>
@@ -10,6 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Chiron" Version="7.0.0-beta-180105" />
     <PackageReference Include="FSharp.Json" Version="0.4.1" />
   </ItemGroup>
 

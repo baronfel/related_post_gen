@@ -1,13 +1,15 @@
 ﻿open System
 open System.IO
 open FSharp.NativeInterop
-open FSharp.Json
 open System.Collections.Generic
 
 #nowarn "9"
 
 let inline stackalloc<'a when 'a: unmanaged> (length: int) : Span<'a> =
-    let p = NativePtr.stackalloc<'a> length |> NativePtr.toVoidPtr
+    let p =
+        NativePtr.stackalloc<'a> length
+        |> NativePtr.toVoidPtr
+
     Span<'a>(p, length)
 
 
@@ -15,16 +17,213 @@ let inline stackalloc<'a when 'a: unmanaged> (length: int) : Span<'a> =
 type Post =
     { _id: string
       title: string
-      tags: string[] }
+      tags: string [] }
 
 [<Struct>]
 type RelatedPosts =
     { _id: string
-      tags: string[]
-      related: Post[] }
+      tags: string []
+      related: Post [] }
 
 let srcDir = __SOURCE_DIRECTORY__
-let posts = Json.deserialize<Post[]> (File.ReadAllText $"{srcDir}/../posts.json")
+
+module Serialization =
+    open System.Text.Json.Serialization.Metadata
+    open System.Text.Json
+    open System.Text.Json.Serialization
+
+    type Writer<'t> = Utf8JsonWriter -> 't -> unit
+
+    let serializeArray (writeFn: Writer<'t>) (writer: Utf8JsonWriter) (values: 't []) =
+        if values = null then
+            writer.WriteNullValue()
+        else
+            writer.WriteStartArray()
+
+            for value in values do
+                writeFn writer value
+
+            writer.WriteEndArray()
+
+    let writePost: Writer<Post> =
+        fun writer post ->
+            writer.WriteStartObject()
+            writer.WriteString("_id", post._id)
+            writer.WriteString("title", post.title)
+            writer.WritePropertyName "tags"
+            serializeArray (fun (writer: Utf8JsonWriter) (tag: string) -> writer.WriteStringValue tag) writer post.tags
+            writer.WriteEndObject()
+
+    let postInfo options =
+        let info =
+            JsonObjectInfoValues<Post>(
+                ObjectWithParameterizedConstructorCreator =
+                    (fun [| id; tags; title |] ->
+                        { _id = unbox id
+                          tags = unbox tags
+                          title = unbox title }),
+                SerializeHandler = Action<_, _>(writePost)
+            )
+
+        JsonMetadataServices.CreateObjectInfo<Post>(options, info)
+
+    let postsInfo elementInfo options =
+        let postsInfo: JsonCollectionInfoValues<Post []> =
+            JsonCollectionInfoValues<Post []>(
+                ObjectCreator = null,
+                KeyInfo = null,
+                ElementInfo = elementInfo,
+                NumberHandling = JsonNumberHandling.Strict,
+                SerializeHandler = Action<_, _>(serializeArray writePost)
+            )
+
+        JsonMetadataServices.CreateArrayInfo<Post>(options, postsInfo)
+
+    let writeRelatedPost: Writer<RelatedPosts> =
+        fun writer post ->
+            writer.WriteStartObject()
+            writer.WriteString("_id", post._id)
+            writer.WritePropertyName "related"
+            serializeArray writePost writer post.related
+            writer.WritePropertyName "tags"
+
+            serializeArray (fun (writer: Utf8JsonWriter) (tag: string) -> writer.WriteStringValue tag) writer post.tags
+
+
+    let relatedPostInfo options =
+
+        let objectInfo =
+            new JsonObjectInfoValues<RelatedPosts>(
+                ObjectWithParameterizedConstructorCreator =
+                    (fun [| _id; tags; related |] ->
+                        { _id = unbox _id
+                          tags = unbox tags
+                          related = unbox related }),
+                SerializeHandler = Action<_, _>(writeRelatedPost)
+            )
+
+        JsonMetadataServices.CreateObjectInfo<RelatedPosts>(options, objectInfo)
+
+    let relatedPostsInfo element options =
+        let postsInfo: JsonCollectionInfoValues<RelatedPosts []> =
+            JsonCollectionInfoValues<RelatedPosts []>(
+                ObjectCreator = null,
+                KeyInfo = null,
+                ElementInfo = element,
+                NumberHandling = JsonNumberHandling.Strict,
+                SerializeHandler = Action<_, _>(serializeArray writeRelatedPost)
+            )
+
+        JsonMetadataServices.CreateArrayInfo<RelatedPosts>(options, postsInfo)
+
+    let stringInfo options =
+        JsonMetadataServices.CreateValueInfo<string>(options, JsonMetadataServices.StringConverter)
+
+    let stringArrayInfo options =
+        let info =
+            JsonCollectionInfoValues<System.String []>(
+
+                ObjectCreator = null,
+                KeyInfo = null,
+                ElementInfo = stringInfo options,
+                NumberHandling = JsonNumberHandling.Strict,
+                SerializeHandler =
+                    serializeArray (fun (writer: Utf8JsonWriter) (value: string) -> writer.WriteStringValue value)
+            )
+
+        JsonMetadataServices.CreateArrayInfo<string>(options, info)
+
+    let serializationOptions = JsonSerializerOptions()
+
+    serializationOptions.TypeInfoResolver <-
+        let mutable pI = null
+        let mutable rpI = null
+
+        { new IJsonTypeInfoResolver with
+            member this.GetTypeInfo(``type``: Type, options: JsonSerializerOptions) : JsonTypeInfo =
+                Console.WriteLine("looking up type: {0}", ``type``.FullName)
+
+                if ``type`` = typeof<Post> then
+                    if pI = null then pI <- postInfo options
+                    pI
+                elif ``type`` = typeof<Post []> then
+                    postsInfo pI options
+                elif ``type`` = typeof<RelatedPosts> then
+                    if rpI = null then
+                        rpI <- relatedPostInfo options
+
+                    rpI
+                elif ``type`` = typeof<RelatedPosts []> then
+                    relatedPostsInfo rpI options
+                elif ``type`` = typeof<string []> then
+                    stringArrayInfo options
+                elif ``type`` = typeof<string> then
+                    stringInfo options
+                else
+                    null }
+
+    let parsePosts path =
+        JsonSerializer.Deserialize<Post []>(File.OpenRead(path), serializationOptions)
+
+    let savePosts path posts =
+        JsonSerializer.Serialize<RelatedPosts []>(File.OpenWrite(path), posts, serializationOptions)
+
+module Chiron =
+    open Chiron
+    open Chiron.Serialization.Json
+
+    let decodePost: Decoder<Json, Post> =
+        let mk i t tags = { _id = i; title = t; tags = tags }
+
+        let props =
+            Decoder.map3
+                mk
+                (Decode.required Decode.string "_id")
+                (Decode.required Decode.string "title")
+                (Decode.required (Decode.arrayWith Decode.string) "tags")
+
+        Decode.jsonObjectWith props
+
+    let decodePostArray = Decode.arrayWith decodePost
+
+    let encodePost =
+        let props (post: Post) jobj =
+            jobj
+            |> Encode.required Encode.string "_id" post._id
+            |> Encode.required Encode.string "title" post.title
+            |> Encode.required (Encode.arrayWith Encode.string) "tags" post.tags
+
+        Encode.jsonObjectWith props
+
+    let encodeRelatedPost =
+        let props (post: RelatedPosts) jobj =
+            jobj
+            |> Encode.required Encode.string "_id" post._id
+            |> Encode.required (Encode.arrayWith Encode.string) "tags" post.tags
+            |> Encode.required (Encode.arrayWith encodePost) "related" post.related
+
+        Encode.jsonObjectWith props
+
+    let encodeRelatedPosts = Encode.arrayWith encodeRelatedPost
+
+    let parsePosts path =
+        Parsing.Json.parseStream (File.OpenRead(path))
+        |> JsonResult.bind decodePostArray
+        |> JsonResult.getOrThrow
+
+    let savePosts path posts =
+        use writeStream = File.OpenWrite(path)
+
+        use writer = new StreamWriter(writeStream)
+
+        Json.serializeWith encodeRelatedPosts JsonFormattingOptions.Compact posts
+        |> writer.WriteLine
+
+
+let posts =
+    let path = Path.Combine(srcDir, "../posts.json")
+    //Chiron.parsePosts path
+    Serialization.parsePosts path
 
 let stopwatch = Diagnostics.Stopwatch()
 stopwatch.Start()
@@ -52,7 +251,7 @@ for kv in tagPostsTmp do
 
 let topN = 5
 
-let allRelatedPosts: RelatedPosts[] =
+let allRelatedPosts: RelatedPosts [] =
     posts
     |> Array.mapi (fun postId post ->
         let taggedPostCount = stackalloc posts.Length
@@ -98,7 +297,7 @@ let allRelatedPosts: RelatedPosts[] =
 
 
 stopwatch.Stop()
-printfn "Processing time (w/o IO): %dms" stopwatch.ElapsedMilliseconds
-let json = Json.serialize allRelatedPosts
+System.Console.WriteLine("Processing time (w/o IO): {0}ms", stopwatch.ElapsedMilliseconds)
 
-File.WriteAllText($"{srcDir}/../related_posts_fsharp.json", json)
+let path = Path.Combine(srcDir, "../related_posts_fsharp.json")
+Serialization.savePosts path allRelatedPosts
