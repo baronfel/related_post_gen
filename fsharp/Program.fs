@@ -57,30 +57,22 @@ module Serialization =
     let postInfo options =
         let info =
             JsonObjectInfoValues<Post>(
-                ObjectCreator =
-                    (fun () ->
-                        { _id = null
-                          title = null
-                          tags = null }),
-                ObjectWithParameterizedConstructorCreator = null,
-                PropertyMetadataInitializer = null,
-                ConstructorParameterMetadataInitializer =
-                    (fun _ ->
-                        [| JsonParameterInfoValues(Name = "_id", ParameterType = typeof<string>, Position = 0)
-                           JsonParameterInfoValues(Name = "title", ParameterType = typeof<string>, Position = 1)
-                           JsonParameterInfoValues(Name = "tags", ParameterType = typeof<string []>, Position = 2) |]),
-                NumberHandling = JsonNumberHandling.Strict,
-                SerializeHandler = writePost
+                ObjectWithParameterizedConstructorCreator =
+                    (fun [| id; tags; title |] ->
+                        { _id = unbox id
+                          tags = unbox tags
+                          title = unbox title }),
+                SerializeHandler = Action<_, _>(writePost)
             )
 
         JsonMetadataServices.CreateObjectInfo<Post>(options, info)
 
-    let postsInfo options =
+    let postsInfo elementInfo options =
         let postsInfo: JsonCollectionInfoValues<Post []> =
             JsonCollectionInfoValues<Post []>(
                 ObjectCreator = null,
                 KeyInfo = null,
-                ElementInfo = postInfo options,
+                ElementInfo = elementInfo,
                 NumberHandling = JsonNumberHandling.Strict,
                 SerializeHandler = Action<_, _>(serializeArray writePost)
             )
@@ -102,30 +94,22 @@ module Serialization =
 
         let objectInfo =
             new JsonObjectInfoValues<RelatedPosts>(
-                ObjectCreator =
-                    (fun () ->
-                        { _id = null
-                          tags = null
-                          related = null }),
-                ObjectWithParameterizedConstructorCreator = null,
-                PropertyMetadataInitializer = null,
-                ConstructorParameterMetadataInitializer =
-                    (fun () ->
-                        [| JsonParameterInfoValues(Name = "_id", ParameterType = typeof<string>, Position = 0)
-                           JsonParameterInfoValues(Name = "tags", ParameterType = typeof<string []>, Position = 1)
-                           JsonParameterInfoValues(Name = "related", ParameterType = typeof<Post []>, Position = 2) |]),
-                NumberHandling = JsonNumberHandling.Strict,
+                ObjectWithParameterizedConstructorCreator =
+                    (fun [| _id; tags; related |] ->
+                        { _id = unbox _id
+                          tags = unbox tags
+                          related = unbox related }),
                 SerializeHandler = Action<_, _>(writeRelatedPost)
             )
 
         JsonMetadataServices.CreateObjectInfo<RelatedPosts>(options, objectInfo)
 
-    let relatedPostsInfo options =
+    let relatedPostsInfo element options =
         let postsInfo: JsonCollectionInfoValues<RelatedPosts []> =
             JsonCollectionInfoValues<RelatedPosts []>(
                 ObjectCreator = null,
                 KeyInfo = null,
-                ElementInfo = relatedPostInfo options,
+                ElementInfo = element,
                 NumberHandling = JsonNumberHandling.Strict,
                 SerializeHandler = Action<_, _>(serializeArray writeRelatedPost)
             )
@@ -152,18 +136,25 @@ module Serialization =
     let serializationOptions = JsonSerializerOptions()
 
     serializationOptions.TypeInfoResolver <-
+        let mutable pI = null
+        let mutable rpI = null
+
         { new IJsonTypeInfoResolver with
             member this.GetTypeInfo(``type``: Type, options: JsonSerializerOptions) : JsonTypeInfo =
                 Console.WriteLine("looking up type: {0}", ``type``.FullName)
 
                 if ``type`` = typeof<Post> then
-                    postInfo options
-                elif ``type`` = typeof<RelatedPosts> then
-                    relatedPostInfo options
+                    if pI = null then pI <- postInfo options
+                    pI
                 elif ``type`` = typeof<Post []> then
-                    postsInfo options
+                    postsInfo pI options
+                elif ``type`` = typeof<RelatedPosts> then
+                    if rpI = null then
+                        rpI <- relatedPostInfo options
+
+                    rpI
                 elif ``type`` = typeof<RelatedPosts []> then
-                    relatedPostsInfo options
+                    relatedPostsInfo rpI options
                 elif ``type`` = typeof<string []> then
                     stringArrayInfo options
                 elif ``type`` = typeof<string> then
