@@ -45,9 +45,6 @@ module Serialization =
 
             writer.WriteEndArray()
 
-
-    let serializationOptions = JsonSerializerOptions()
-
     let writePost: Writer<Post> =
         fun writer post ->
             writer.WriteStartObject()
@@ -57,7 +54,7 @@ module Serialization =
             serializeArray (fun (writer: Utf8JsonWriter) (tag: string) -> writer.WriteStringValue tag) writer post.tags
             writer.WriteEndObject()
 
-    let postInfo =
+    let postInfo options =
         let info =
             JsonObjectInfoValues<Post>(
                 ObjectCreator =
@@ -76,19 +73,19 @@ module Serialization =
                 SerializeHandler = writePost
             )
 
-        JsonMetadataServices.CreateObjectInfo<Post>(serializationOptions, info)
+        JsonMetadataServices.CreateObjectInfo<Post>(options, info)
 
-    let postsInfo =
+    let postsInfo options =
         let postsInfo: JsonCollectionInfoValues<Post []> =
             JsonCollectionInfoValues<Post []>(
                 ObjectCreator = null,
                 KeyInfo = null,
-                ElementInfo = postInfo,
+                ElementInfo = postInfo options,
                 NumberHandling = JsonNumberHandling.Strict,
                 SerializeHandler = Action<_, _>(serializeArray writePost)
             )
 
-        JsonMetadataServices.CreateArrayInfo<Post>(serializationOptions, postsInfo)
+        JsonMetadataServices.CreateArrayInfo<Post>(options, postsInfo)
 
     let writeRelatedPost: Writer<RelatedPosts> =
         fun writer post ->
@@ -101,7 +98,7 @@ module Serialization =
             serializeArray (fun (writer: Utf8JsonWriter) (tag: string) -> writer.WriteStringValue tag) writer post.tags
 
 
-    let relatedPostInfo =
+    let relatedPostInfo options =
 
         let objectInfo =
             new JsonObjectInfoValues<RelatedPosts>(
@@ -121,65 +118,64 @@ module Serialization =
                 SerializeHandler = Action<_, _>(writeRelatedPost)
             )
 
-        JsonMetadataServices.CreateObjectInfo<RelatedPosts>(serializationOptions, objectInfo)
+        JsonMetadataServices.CreateObjectInfo<RelatedPosts>(options, objectInfo)
 
-    let relatedPostsInfo =
+    let relatedPostsInfo options =
         let postsInfo: JsonCollectionInfoValues<RelatedPosts []> =
             JsonCollectionInfoValues<RelatedPosts []>(
                 ObjectCreator = null,
                 KeyInfo = null,
-                ElementInfo = relatedPostInfo,
+                ElementInfo = relatedPostInfo options,
                 NumberHandling = JsonNumberHandling.Strict,
                 SerializeHandler = Action<_, _>(serializeArray writeRelatedPost)
             )
 
-        JsonMetadataServices.CreateArrayInfo<RelatedPosts>(serializationOptions, postsInfo)
+        JsonMetadataServices.CreateArrayInfo<RelatedPosts>(options, postsInfo)
 
-    let stringInfo =
-        JsonMetadataServices.CreateValueInfo<string>(serializationOptions, JsonMetadataServices.StringConverter)
+    let stringInfo options =
+        JsonMetadataServices.CreateValueInfo<string>(options, JsonMetadataServices.StringConverter)
 
-    let stringArrayInfo =
+    let stringArrayInfo options =
         let info =
             JsonCollectionInfoValues<System.String []>(
 
                 ObjectCreator = null,
                 KeyInfo = null,
-                ElementInfo = stringInfo,
+                ElementInfo = stringInfo options,
                 NumberHandling = JsonNumberHandling.Strict,
                 SerializeHandler =
                     serializeArray (fun (writer: Utf8JsonWriter) (value: string) -> writer.WriteStringValue value)
             )
 
-        JsonMetadataServices.CreateArrayInfo<string>(serializationOptions, info)
+        JsonMetadataServices.CreateArrayInfo<string>(options, info)
 
+    let serializationOptions = JsonSerializerOptions()
 
     serializationOptions.TypeInfoResolver <-
-        JsonTypeInfoResolver.Combine(
-            { new IJsonTypeInfoResolver with
-                member this.GetTypeInfo(``type``: Type, options: JsonSerializerOptions) : JsonTypeInfo =
-                    Console.WriteLine("looking up type: {0}", ``type``.FullName)
+        { new IJsonTypeInfoResolver with
+            member this.GetTypeInfo(``type``: Type, options: JsonSerializerOptions) : JsonTypeInfo =
+                Console.WriteLine("looking up type: {0}", ``type``.FullName)
 
-                    if ``type`` = typeof<Post> then
-                        postInfo
-                    elif ``type`` = typeof<RelatedPosts> then
-                        relatedPostInfo
-                    elif ``type`` = typeof<Post []> then
-                        postsInfo
-                    elif ``type`` = typeof<RelatedPosts []> then
-                        relatedPostsInfo
-                    elif ``type`` = typeof<string []> then
-                        stringArrayInfo
-                    elif ``type`` = typeof<string> then
-                        stringInfo
-                    else
-                        null }
-        )
+                if ``type`` = typeof<Post> then
+                    postInfo options
+                elif ``type`` = typeof<RelatedPosts> then
+                    relatedPostInfo options
+                elif ``type`` = typeof<Post []> then
+                    postsInfo options
+                elif ``type`` = typeof<RelatedPosts []> then
+                    relatedPostsInfo options
+                elif ``type`` = typeof<string []> then
+                    stringArrayInfo options
+                elif ``type`` = typeof<string> then
+                    stringInfo options
+                else
+                    null }
 
     let parsePosts path =
-        JsonSerializer.Deserialize(File.OpenRead(path), postsInfo)
+        JsonSerializer.Deserialize<Post []>(File.OpenRead(path), serializationOptions)
 
     let savePosts path posts =
-        JsonSerializer.Serialize(File.OpenWrite(path), posts, relatedPostsInfo)
+        JsonSerializer.Serialize<RelatedPosts []>(File.OpenWrite(path), posts, serializationOptions)
 
 module Chiron =
     open Chiron
